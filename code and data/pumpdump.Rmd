@@ -1,0 +1,1585 @@
+---
+output:
+  pdf_document:
+    keep_tex: yes
+  html_document: default
+---
+
+```{r}
+# install.packages('randomForest')
+# install.packages('glmnet')
+# install.packages("tikzDevice")
+# install.packages("data.table")
+# install.packages('httr')
+# install.packages('dplyr')
+# install.packages('jsonlite')
+# install.packages('anytime')
+# install.packages('knitr')
+# install.packages('anytime')
+# install.packages('plotly')
+
+library(dplyr)
+library(magrittr)
+library(anytime)
+library(jsonlite)
+library(plotly)
+require(knitr)
+library(randomForest)
+library(glmnet)
+library(tidyr)
+library(tikzDevice)
+library(data.table)
+
+options(stringsAsFactors = F)
+opts_chunk$set(dev='tikz', fig.path='../figure/',
+                      echo=F, error=F, cache=F, message=F, results='hide', warning=F, autodep=T)
+
+# Sys.setlocale("LC_TIME", "English") # doesn't work with mac
+Sys.setenv(TZ='GMT')
+```
+
+```{r eval = T}
+case = read.csv('casestudy.csv')
+case$TIMESTAMP %<>% strptime('%d/%m/%Y %I:%M:%S %p')
+case$sat = case$PRICEBTC*1e8
+
+
+case %<>% .[order(.$TIMESTAMP),]
+pumpwindow = (case$TIMESTAMP > "2018-11-14 19:25:00 GMT") & (case$TIMESTAMP < "2018-11-14 19:34:00 GMT")
+
+col1 = rgb(40,40,40,190, max = 255)
+col2 = rgb(204,51,51,100, max = 255)
+col3 = rgb(51,204,51,100, max = 255)
+```
+
+```{r Case, eval = F}
+
+# barplot(case$TIMESTAMP[pumpwindow], case$TOTALBTC[pumpwindow], pch=16, axes=F, xlab=NA, ylab=NA, cex=1.2)
+xat = c('2018-11-14 19:30:00 GMT',
+        '2018-11-14 19:31:00 GMT',
+        '2018-11-14 19:32:00 GMT',
+        '2018-11-14 19:33:00 GMT',
+        '2018-11-14 19:34:00 GMT')%>% as.POSIXlt
+par(ann=F, bty = 'n', xpd = T, mar=c(3,3,1,4), cex = 1.2)
+ymax = max(case$sat[pumpwindow])
+plot(case$TIMESTAMP[pumpwindow] %>% as.numeric, case$sat[pumpwindow], type = 's',
+     xaxt = 'n', yaxt = 'n', ylim = c(0,ymax))
+axis(side=1, at = xat %>% as.numeric, labels = xat %>% format("%H:%M:%S"), line = 0.5)
+axis(side=2, at = seq(0,110,by = 20), line = -0.5)
+
+xpos = case$TIMESTAMP[pumpwindow] %>% min
+ymin = case$sat[pumpwindow][1]
+points(x= xpos, y=ymin, col='grey', cex = 2, pch = 21, bg = col1)
+arrows(xpos %>% as.numeric, ymin-15, y1=ymin-5,length = 0.1)
+text(x=xpos+20, y=ymin-20, labels = paste0(ymin,' Sat\n',
+                                           xpos%>% format("%H:%M:%S")))
+
+
+xpos = case$TIMESTAMP[pumpwindow][case$sat[pumpwindow]==ymax]
+points(x= xpos %>% mean, y=ymax, col='grey', cex = 2, pch = 21, bg = col1)
+arrows(xpos[1]+20, ymax, x1=xpos[1]+5,length = 0.1)
+text(x=xpos[1]+50, y=ymax, labels = paste0(ymax,' Sat\n',
+                                           xpos[1:2] %>% format("%H:%M:%S") %>% paste(collapse = ' --- ')))
+
+
+mtext('Trading price in Sat ($10^{-8}$ BTC)',2, line = 2, cex = 1.2)
+par(new = T)
+plot(case$TIMESTAMP[pumpwindow],rep(0,sum(pumpwindow)), ylim = (case$TOTALBTC[pumpwindow] %>% max)*c(-0.9,1.8), col = NA, yaxt= 'n', xaxt = 'n')
+for (i in 1:sum(pumpwindow)){
+  colr = col3
+  ind = 1
+  if(case$TYPE[pumpwindow][i] == 'Sell'){
+    colr = col2
+    ind = -1}
+segments(case$TIMESTAMP[pumpwindow][i]%>% as.numeric, 0, y1 =ind* case$TOTALBTC[pumpwindow][i], 
+         lwd = 2, col = colr)
+}
+yat = seq(-0.06,0.06,by = 0.03)
+axis(side=4, at = yat, labels = yat %>% abs, line = -0.9)
+text(x='2018-11-14 19:34:25 GMT' %>% as.POSIXlt %>% as.numeric, y = 0.03*c(-1,1), labels=c('Sell','Buy'), srt=90)
+text(x='2018-11-14 19:34:35 GMT' %>% as.POSIXlt %>% as.numeric, y = 0, labels='Trading volume in BTC', srt=90)
+
+legend('topright', legend = c('Price (left axis)', 'Buy volume (right axis)', 'Sell volume (right axis)'),
+       lwd = c(1,2,2), col=c('black',col3,col2))
+
+```
+
+```{r CaseVol, eval = F}
+
+par(mfrow=c(2,1), ann = F, mar = c(0,3.5,0.5,3.5), oma = c(2,0,0,0), cex = 1.2)
+temp = case$TOTALBTC
+xat = c(case$TIMESTAMP[c(1,length(temp))],case$TIMESTAMP[pumpwindow] %>% range) %>% sort
+xx = seq(1,by=1, length.out = length(temp))
+temp[case$TYPE=='Sell'] = 0
+sellvol = sum(temp)
+plot(xx, temp %>%cumsum, type='s', xaxt = 'n', col = 'darkolivegreen4')
+temp = case$TOTALBTC
+temp[case$TYPE=='Buy'] = 0
+buyvol = sum(temp)
+lines(xx, temp %>%cumsum, type='s', col = 'red')
+# polygon(c(1,xx,xx%>%max),c(0,temp %>%cumsum,0), col = col3, border = 'green')
+# polygon(c(1,xx,xx%>%max),c(0,temp %>%cumsum,0), col = col2, border = 'red')
+arrows(length(temp), sellvol-0.17, y1=sellvol,length = 0.1)
+arrows(length(temp), buyvol+0.17, y1=buyvol,length = 0.1)
+text(length(temp), mean(c(buyvol,sellvol)), (sellvol-buyvol) %>% round(2) %>% paste('BTC'), adj=c(1,0.5))
+legend('topleft', legend = c('Cumulative buy volume', 'Cumulative sell volume'), col = c('darkolivegreen4', 'red'), lwd = 1)
+mtext('Trading volume in BTC', 2, cex = 1.2, line = 2)
+
+
+temp = case$AMOUNTBVB/1000
+temp[case$TYPE=='Sell'] = 0
+sellvol = sum(temp)
+plot(xx, temp %>%cumsum, type='s', xaxt = 'n', col = 'darkolivegreen4', yaxt = 'n')
+temp = case$AMOUNTBVB/1000
+temp[case$TYPE=='Buy'] = 0
+buyvol = sum(temp)
+lines(xx, temp %>%cumsum, type='s', col = 'red')
+arrows(length(temp), sellvol-100, y1=sellvol,length = 0.1)
+arrows(length(temp), buyvol+100, y1=buyvol,length = 0.1)
+text(length(temp), mean(c(buyvol,sellvol)), ((sellvol-buyvol)) %>% round(2) %>% paste('k BVB'), adj=c(1,0.5))
+axis(1, at = match(xat,case$TIMESTAMP), labels = xat %>% format("%m/%d\n%H:%M"))
+axis(4)
+mtext('Trading volume in k BVB', 4, cex = 1.2, line = 2)
+```
+
+```{r}
+cryptopiacointable = readLines('cryptopiacointable.txt', encoding = "UTF-8") %>% .[.!=''] %>% paste0(collapse = '') %>% 
+  strsplit('sorting_1') %>% unlist %>% .[-1] %>%
+  lapply(function(x)  
+    x %>% strsplit('\"></div> | [(]|[)]</div></td><td><span title=\"|\"></span><span>') %>% unlist %>% .[2:4]
+    ) %>% do.call(rbind.data.frame, .)
+names(cryptopiacointable) = c('Name', 'Symbol', 'rating')
+class(cryptopiacointable$rating) = 'numeric'
+
+coln = c('telegroup','username','datetime','Symbol','dex','pair')
+```
+
+```{r eval = T}
+# 'https://pumpolymp.com:5001/api/allPumps'
+# telegrampumps = fromJSON('allPumps.json')
+
+# https://pumpolymp.com:5001/api/PumpMarketHistory/raw
+tickdata = fromJSON('rawpumpolymp.json')
+
+tickdata$tickcount = tickdata$marketHistoryEntries %>% sapply(NROW)
+tickdata$peaktime = tickdata$marketHistoryEntries %>% sapply(function(x) x$timeStamp[which.max(x$rate)])
+tickdata$buyprice = NA
+  
+for (i in 1:NROW(tickdata)){
+  # tickdata$marketHistoryEntries[[i]]$openprice = tickdata$theoreticalBuyPrice[i]
+  tickdata$marketHistoryEntries[[i]]$buy = T
+  
+  tickdata$buyprice[i] = min(
+    tickdata$marketHistoryEntries[[i]]$rate[tickdata$marketHistoryEntries[[i]]$timeStamp <= tickdata$signalTime[i]] %>% 
+      c(tickdata$theoreticalBuyPrice[i]), na.rm =T)
+  
+  if (tickdata$tickcount[i]>1){
+  for (j in 2:NROW(tickdata$marketHistoryEntries[[i]])){
+    x = tickdata$marketHistoryEntries[[i]]$rate[c(j-1,j)]
+    if (diff(x) < 0){
+      tickdata$marketHistoryEntries[[i]]$buy[j] = F
+    } else if (diff(x) == 0)
+      tickdata$marketHistoryEntries[[i]]$buy[j] = tickdata$marketHistoryEntries[[i]]$buy[j-1]
+  }
+  }
+}
+
+tickdata = tickdata[order(-tickdata$tickcount),]
+rownames(tickdata) = c() # rownames were disordered numbers after sorting, confusing
+
+sel = c('channelTitle','channelLink','signalTime','currency','exchange')
+rawtick = tickdata[,c('marketHistoryEntries','buyprice','peaktime','priceBeforePump',sel)] %>% unnest
+rawtick = rawtick[!duplicated(rawtick[,c('currency','exchange','rate', 'amount', 'timeStamp')]),] %>% as.data.table
+rawtick = rawtick[order(exchange, currency, timeStamp),]
+rawtick[, pricechange := rate-priceBeforePump]
+rawtick[, ':='(before = timeStamp <= signalTime, predump = timeStamp <= peaktime,vol = rate * amount, profit = pricechange * amount)]
+
+rawtick[exchange == 'Cryptopia', .(tovol = sum(vol, na.rm = T)),
+        by = .(signalTime, currency)][,.(mean(tovol))]
+
+postannpredump = rawtick[before == F & predump == T, ] 
+postannpredump[, ':='(ivol = vol * (pricechange>0), iprofit = profit* (pricechange>0))]
+
+invprofit = postannpredump[, .(aggvol = sum(ivol), aggpro = sum(iprofit)), by = .(signalTime, currency, exchange)]
+# invprofit[, ':='(ret = aggpro/aggvol)]
+
+invprofit[, .(
+  count = sum(aggvol > 0, na.rm = T),
+  sumpro = sum(aggpro, na.rm = T),
+  avgret = sum(aggpro, na.rm = T)/sum(aggvol, na.rm = T)
+  ), by = .(exchange)]
+
+invprofit[, .(
+  count = sum(aggvol > 0, na.rm = T),
+  sumpro = sum(aggpro, na.rm = T),
+  avgret = sum(aggpro, na.rm = T)/sum(aggvol, na.rm = T)
+  )]
+
+invprofit$signalTime %<>% strsplit('[.]') %>% sapply(`[`,1) %>% 
+  gsub('T',' ',.) %>% gsub('Z','',.) %>% gsub('1999','2019',.) %>% as.POSIXct(tz = 'GMT')
+
+# checkdupe = invprofit[,.(c(99999,diff(signalTime %>% as.numeric))), by = .(currency,exchange)] # no dupe
+
+# rawtick[, ':='(beforeafter = ifelse(before, 'before', 'later'),
+#                                     buysell = ifelse(buy, 'buy', 'sell'))]
+# 
+# aggrevol = rawtick[, .(aggvol = sum(vol)), by = .(signalTime, currency, exchange, buysell, beforeafter)] %>% dcast(signalTime + currency + exchange ~ buysell + beforeafter, value.var = 'aggvol')
+
+
+
+tickdata$signalTime %<>% strsplit('[.]') %>% sapply(`[`,1) %>% 
+  gsub('T',' ',.) %>% gsub('Z','',.) %>% gsub('1999','2019',.) %>% as.POSIXct(tz = 'GMT') # data downloaded in London
+
+pumps = tickdata[,sel]
+names(pumps) = coln[1:NCOL(pumps)]
+pumps$pair = 'BTC'
+```
+
+```{r eval = T}
+pumps %<>% .[!duplicated(pumps[,coln[2:3]]),]
+pumps$username %<>%  strsplit('https://t.me/')  %>% sapply(`[`,2)
+pumps %<>% .[.$datetime %>% order(decreasing = T),]
+# pumps %>% write.table('telegrampumps.txt', row.names = F, quote = F, sep = '\t')
+
+
+pumps %<>% .[!(.$Symbol %in% c('ETH','BTC','BCH','ETC','LTC', 'USDT', 'BAT')),]
+
+  #### some maunally collected, paired with ETH or before July, not included
+
+# manualpumps = data.frame(
+#   username=c('robingoodsignal', 'ExplosivePumps','ExplosivePumps','ExplosivePumps',
+#              'cryptojohnmcafee'),
+#   datetime=c('2018-10-10 20:00:07','2018-04-22 19:00:11','2018-04-07 14:20:05',
+#              '2018-03-01 16:00:39','2017-10-04 21:59:03')%>% as.POSIXlt,
+#   Symbol=c('PLX','ETC','ELF','ETHS','OCEAN'),
+#   dex=c('Coinexchange','Bibox','Bibox','Yobit','Yobit'),
+#   pair=c('ETH','ETH','ETH','BTC','ETH')
+# )
+
+# # get coin list ----
+# coinlist = fromJSON('https://min-api.cryptocompare.com/data/all/coinlist')$Data %>% do.call(rbind, .) %>% data.frame
+# 
+# baseurl1 = "https://www.cryptocompare.com/api/data/coinsnapshotfullbyid/?id="
+# CoinSnapshotFullById = list()
+# for (i in 1:NROW(coinlist)){
+#   try({
+#   CoinSnapshotFullById[[coinlist$Symbol[i]%>% names]] = fromJSON(paste0(baseurl1, coinlist$Id[i]))$Data$General
+#   }, silent = T)
+#   print(i)
+# }
+# 
+# 
+# baseurl2 = "https://www.cryptocompare.com/api/data/socialstats/?id="
+# SocialStats = list()
+# for (i in 1:NROW(coinlist)){
+#   try({
+#   SocialStats[[coinlist$Symbol[i]%>% names]] = fromJSON(paste0(baseurl2, coinlist$Id[i]))$Data
+#   }, silent = T)
+#   print(i)
+# }
+# 
+# # baseurl0 = "https://www.cryptocompare.com"
+# # for (i in (coinlist$ImageUrl %>% .[327:NROW(.)])){
+# #   try(download.file(paste0(baseurl0,i),
+# #                 paste0('../figure/coinimage/', gsub('[^[:alnum:](.)]','',i))
+# #                 , mode='wb'),silent = T)
+# #
+# # }
+
+pumpsdex = pumps$dex %>% unique %>% sort
+dexs = pumpsdex %>% c('CCCAGG')
+
+load('cryptopiacoins.RData')
+# cryptopiacoins = rbind(fromJSON('https://www.cryptopia.co.nz/api/GetCurrencies')$Data, cryptopiacoins)
+# cryptopiacoins %<>% .[!duplicated(.$Id),]
+# save(cryptopiacoins,file = 'cryptopiacoins.RData')
+Symbols = c(pumps$Symbol, cryptopiacoins$Symbol) %>% unique
+
+## get hourly price ----
+
+baseurl = 'https://min-api.cryptocompare.com/data/'
+# 
+# hourprice = list()
+# # time1 = as.numeric(max(pumps$datetime)+3600*18)
+# time1 = (Sys.time() %>% as.integer) - 600
+# 
+# for (i in 1:NROW(Symbols)){
+#   for (j in 1:NROW(dexs)) {
+#     try({
+#       request = paste0('histohour?fsym=',Symbols[i],'&e=',dexs[j],'&tsym=BTC&limit=2000&toTs=')
+# 
+#       temp = paste0(baseurl,request,time1) %>% fromJSON
+# 
+#       time = temp$TimeFrom - 1
+#       temp2 = paste0(baseurl,request,time) %>% fromJSON
+#       
+#       time = temp2$TimeFrom - 1
+#       temp3 = paste0(baseurl,request,time) %>% fromJSON
+# 
+#       hourprice[[Symbols[i]]][[dexs[j]]] = rbind(temp3$Data,temp2$Data,temp$Data) %>% .[order(.$time,decreasing = T),]
+#     },silent = T)
+#   }
+#   print(i)
+# }
+
+# save(CoinSnapshotFullById, SocialStats, coinlist, hourprice , file='cryptocompare.RData')
+
+
+load('cryptocompare.RData')
+
+
+outpost = read.csv('outposts.csv') 
+
+# no need to run it over and onver again if there is no new post
+# outpostold = read.csv('outpostold.csv')
+# outpost %<>% merge(outpostold, all = T)
+# outpost %>% write.csv('outpostold.csv')
+
+outpost$timestamp %<>% anytime
+
+# pumps$ = NA
+# pumps$ = NA
+# pumps$ = NA
+# pumps$ = NA
+# pumps$ = NA
+# # pumps$last_views = NA
+# pumps$ = NA
+# pumps$ = NA
+
+hours = c(1, 3, 12, 24, 36, 48, 60, 72)
+coln = c('open_price', 'high_price', 'low_price', 'close_price', 'views', 'volumeto', 'volumeto_before', c('volumefrom', 'volumeto') %>% lapply(function(x) paste0(x, hours,'h')) %>% unlist) 
+# reg_cryptopia = data.frame(matrix(ncol = length(coln) , nrow = NROW(pumpscryptopia_reg)*NROW(cryptopiacoins_reg)))
+# 
+# names(reg_cryptopia) = coln
+pumps[,coln] = NA
+
+for (i in 1:NROW(pumps)) {
+  try({
+    temppost = outpost[
+      outpost$channel_username == pumps$username[i] & outpost$timestamp <= pumps$datetime[i]
+      ,] %>% .[order(.$timestamp, decreasing = T),]
+    temp = hourprice[[pumps$Symbol[i]]][[pumps$dex[i]]]
+
+    tempind = abs(pumps[i,'datetime'] %>% as.numeric - temp$time) %>% which.min
+# three hour window
+pumphours = temp[tempind + ((-1):1),]
+pumps$open_price[i] = pumphours$open[pumphours$time %>% which.min]
+pumps$high_price[i] = pumphours$high %>% max
+pumps$low_price[i] = pumphours$low %>% max
+pumps$close_price[i] = pumphours$close[pumphours$time %>% which.max]
+pumps$views[i] = temppost$views[1:min(3,NROW(temppost))] %>% max(na.rm = T)
+# pumps$last_views[i] = temppost$views[1:min(3,NROW(temppost))] %>% max(na.rm = T)
+pumps$volumeto[i] = pumphours$volumeto %>% sum(na.rm = T)
+
+pumps$volumeto_before[i] = temp[abs(pumps[i,'datetime'] %>% as.numeric - temp$time) %>% which.min + (2:4),'volumeto'] %>% sum(na.rm = T)
+
+# tempprice = hourprice[[temp$Symbol[j]]]$Cryptopia
+# tempind = abs(pumptime %>% as.numeric - tempprice$time) %>% which.min
+tempind = tempind + 1
+pumps[i,c('lastprice')] = temp[tempind,c('open')]
+pumps[i, paste0('volumefrom',hours,'h')] = hours %>% sapply(function(x) temp$volumefrom[tempind + 0:(x-1)] %>% sum(na.rm = T))
+pumps[i, paste0('volumeto',hours,'h')] = hours %>% sapply(function(x) temp$volumeto[tempind + 0:(x-1)] %>% sum(na.rm = T))
+
+}, silent = T)
+}
+
+pumps$views[!is.finite(pumps$views)] = NA
+
+pumps %<>% transform(pump_gain = (high_price-open_price)/open_price,
+                     dump_loss = (close_price-high_price)/high_price)
+
+## time range of two pumps of the same coin----
+
+pumpsunique = pumps[!duplicated(pumps[,c('Symbol','datetime','dex')]),]
+ 
+multicoins = pumpsunique$Symbol %>% table %>% sort(decreasing = T) %>% .[.>1] %>% names
+pumptimerange = data.frame(matrix(ncol = 3 , nrow = 0))
+for (i in 1:length(multicoins)){
+  temptime = pumpsunique$datetime[pumpsunique$Symbol == multicoins[i]] %>% sort
+  temp = data.frame(matrix(ncol = 3 , nrow = 0))
+  temp =  cbind(multicoins[i], (temptime %>% as.numeric %>% diff)/3600/24,
+                                 temptime[-1]%>% as.character)
+  pumptimerange %<>% rbind(temp)
+}
+
+pumptimerange[,2] %<>% as.numeric
+
+names(pumptimerange) = c('coin', 'timerange', 'totime')
+
+pumpdupe = pumptimerange %>% .[.$timerange<0.05,] 
+
+pumpsunique %<>% .[!(paste(.$Symbol,.$datetime) %in% paste(pumpdupe[,1],pumpdupe[,3])),]
+
+for (i in 1:NROW(pumpsunique)){
+  pumpsunique$views[i] = pumps %>% .[.$Symbol == pumpsunique$Symbol[i] & .$dex == pumpsunique$dex[i] & abs(.$datetime %>% as.numeric - pumpsunique$datetime[i] %>% as.numeric)<4320,] %>% .$views %>% sum(na.rm = T) #
+}
+
+pumpsunique$views[pumpsunique$views==0] = NA
+col1 = rgb(40,40,40,190, max = 255)
+col2 = rgb(204,51,51,180, max = 255)
+col3 = rgb(51,204,51,180, max = 255)
+
+# save(pumpsunique, pumps, outpost, dexs, pumpsdex, file='pumps.RData')
+```
+
+```{r}
+# load('pumps.RData')
+
+load('cryptocompare.RData')
+
+for (i in 1:length(hourprice)){
+  for (j in 1:length(hourprice[[i]])){
+    price =  hourprice[[i]][[j]]$close
+    hourprice[[i]][[j]]$return = log(price) - log(lead(price))
+    ind = hourprice[[i]][[j]] %>% NROW
+    hourprice[[i]][[j]]$return[ind] = log(hourprice[[i]][[j]]$close[ind]) - log(hourprice[[i]][[j]]$open[ind])
+  }
+}
+
+listingstatus = data.frame(Exchange = dexs[1:4],Active = 0, Deslisted = 0)
+load('exchangecoins.RData')
+
+pumpscryptopia = pumpsunique %>% .[.$dex == dexs[3],]
+cryptopiacoins$pumped = cryptopiacoins$Symbol %in% pumpscryptopia$Symbol
+listed = cryptopiacoins[,c('ListingStatus','pumped')] %>% table %>% .[1,2]
+#delisted as percentage of pumped
+listingstatus$Active[3] = sum(listed)
+listingstatus$Deslisted[3] = (pumpscryptopia$Symbol %>% unique %>% length) - sum(listed)
+
+
+# binancecoins = fromJSON('https://api.binance.com/api/v1/ticker/allPrices')
+pumpsbinance = pumpsunique %>% .[.$dex == dexs[1],]
+listed = pumpsbinance$Symbol %>% unique %>% paste0('BTC') %in% binancecoins$symbol
+# pumpsbinance$Symbol[!listed]
+listingstatus$Active[1] = sum(listed)
+listingstatus$Deslisted[1] = (pumpsbinance$Symbol %>% unique %>% length) - sum(listed)
+
+# bittrexcoins = fromJSON('https://bittrex.com/api/v1.1/public/getcurrencies')$result
+pumpsbittrex = pumpsunique %>% .[.$dex == dexs[2],]
+listed = pumpsbittrex$Symbol %>% unique %in% bittrexcoins$Currency
+# pumpsbittrex$Symbol[!listed]
+listingstatus$Active[2] = sum(listed)
+listingstatus$Deslisted[2] = (pumpsbittrex$Symbol %>% unique %>% length) - sum(listed)
+
+# yobitcoins = fromJSON('https://yobit.net/api/3/info')
+pumpsyobit = pumpsunique %>% .[.$dex == dexs[4],]
+listed = pumpsyobit$Symbol %>% unique %>% tolower %>% paste0('_btc') %in% (yobitcoins$pairs %>% names)
+# pumpsyobit$Symbol[!listed]
+listingstatus$Active[4] = sum(listed)
+listingstatus$Deslisted[4] = (pumpsyobit$Symbol %>% unique %>% length) - sum(listed)
+
+# save(binancecoins, bittrexcoins, cryptopiacoins, yobitcoins, file = 'exchangecoins.RData')
+listingstatus$Total = listingstatus$Active + listingstatus$Deslisted
+
+# coinbasecoins = c(1+(0:20)*100) %>% paste0('https://api.coinmarketcap.com/v2/ticker/?sort=id&convert=BTC&start=',.) %>%
+# sapply(fromJSON) %>% do.call(c,.)
+# save(coinbasecoins, file = 'coinbasecoins.RData')
+load('coinbasecoins.RData')
+
+caps = sapply(coinbasecoins, function(x) try(c(x$symbol,x$quotes$BTC$market_cap), silent = T)) %>% do.call(rbind.data.frame, .)
+caps[,2] %<>% as.numeric
+caps %<>% na.omit %>% .[order(.[,2], decreasing = T),]
+names(caps) = c('Symbol', 'mktcap')
+```
+
+```{r eval = F}
+
+# remDr <- remoteDriver(remoteServerAddr = "localhost", 
+#                       port = 4567, 
+#                       browserName = "chrome"
+# )
+
+
+coinsource = rep(NA,2)
+names(coinsource) = cryptopiacoins$Symbol[1:2]
+
+for (i in names(coinsource)){
+rD <- rsDriver(verbose = FALSE,port=4444L)
+remDr <- rD$client
+remDr$open()
+url <- paste0("https://www.cryptopia.co.nz/CoinInfo/?coin=",i,"&view=settings")
+remDr$navigate(url)
+coinsource[i] = remDr$getPageSource()[[1]]  
+rD$server$stop()
+# remDr$close()
+# rm(rD)
+# gc()
+}
+# remDr$closeall()
+# grepl("6/09/2018", coinsource[i])
+
+
+
+# writeLines(coinsource[1], '1.txt')
+
+# 
+# rD <- rsDriver(browser = "chrome")
+# remDr <- rD[["client"]]
+# remDr$navigate(
+#   "http://stackoverflow.com/questions/43833649/get-element-text-using-rselenium")
+# elems <- remDr$findElements(using = 'xpath', "//a")
+# elem <- elems[[1]]
+# class(elem)
+# elem$getElementText()
+# elem$getElementText()[[1]]
+# remDr$close()
+# rD[["server"]]$stop() 
+```
+
+```{r GainViews, eval = F}
+par(pch = 21, cex = 1.6, mar = c(4,4,0.1,0.1))
+
+xlim = c(-200, 24200)
+ylim = c(-1.3, 7.5)
+pumpstemp = pumpsunique %>% .[order(.$volumeto, decreasing=T),c('views','pump_gain','volumeto', 'dex')] %>% na.omit
+maxinch = 0.8/(pumpstemp$volumeto %>% max(na.rm = T) %>% sqrt)
+temp = pumpstemp %>% .[.$dex == dexs[3],] %>% .[order(.$volumeto, decreasing=T),]
+symbols(temp$views, temp$pump_gain, circles = sqrt(temp$volumeto), 
+        inches=(temp$volumeto %>% max(na.rm = T) %>% sqrt) * maxinch, 
+      bg = rgb(128,128,128,100, max = 255),
+     xlim = xlim, ylim = ylim,
+     xlab = 'Views of the coin announcement message',
+     ylab = 'Pump gain', xaxs = 'i', yaxs = 'i', yaxt = 'n')
+yat = seq(0,6,2)
+axis(2,at=yat,labels=c(0,paste0(yat[-1]*100,'\\%')))
+
+temp = pumpstemp %>% .[.$dex == dexs[4],] %>% .[order(.$volumeto, decreasing=T),]
+symbols(temp$views, temp$pump_gain, circles = sqrt(temp$volumeto), 
+        inches=(temp$volumeto %>% max(na.rm = T) %>% sqrt) * maxinch, 
+        bg = rgb(51,204,51,100, max = 255), fg = rgb(51,204,51,255, max = 255), add = T)
+
+temp = pumpstemp %>% .[.$dex == dexs[2],] %>% .[order(.$volumeto, decreasing=T),]
+symbols(temp$views, temp$pump_gain, circles = sqrt(temp$volumeto), inches=(temp$volumeto %>% max(na.rm = T) %>% sqrt) * maxinch, 
+        bg = rgb(204,51,51,100, max = 255), fg = rgb(204,51,51,255, max = 255), add = T)
+
+temp = pumpstemp %>% .[.$dex == dexs[1],] %>% .[order(.$volumeto, decreasing=T),]
+symbols(temp$views, temp$pump_gain, circles = sqrt(temp$volumeto), inches=(temp$volumeto %>% max(na.rm = T) %>% sqrt) * maxinch, 
+        bg = rgb(51,51,204,100, max = 255), fg = rgb(51,51,204,255, max = 255), add = T)
+
+
+# plot(pumps$views[pumps$dex == dexs[3]], pumps$pump_gain[pumps$dex == dexs[3]], bg = 'grey',
+#      xlim = c(0, max(pumps$views, na.rm = T)), ylim = c(0, max(pumps$pump_gain, na.rm = T)),
+#      xlab = 'Views of the coin announcement message',
+#      ylab = 'Multiplication of coin price through pump')
+# 
+# points(pumps$views[pumps$dex == dexs[4]], pumps$pump_gain[pumps$dex == dexs[4]], col = 'darkgreen', bg = c('green'))
+# points(pumps$views[pumps$dex == dexs[2]], pumps$pump_gain[pumps$dex == dexs[2]], col = 'darkblue', bg = 'lightblue')
+# 
+# points(pumps$views[pumps$dex == dexs[1]], pumps$pump_gain[pumps$dex == dexs[1]], col = 'darkred', bg = 'red')
+sz = c(20, 100, 500)
+symbols(rep(21000,length(sz)), 6.8-sqrt(sz)*maxinch*2.2, circles = sz %>% sqrt, 
+        inches=(sz %>% sqrt %>% max) * maxinch, add = T)
+text(rep(21000,length(sz)), 7-sqrt(sz)*maxinch*4, labels = sz)
+legend(13500, 7.75, legend = '', title = 'Volume in BTC', bty = 'n')
+legend(7500, 7.75, legend = dexs[1:4], 
+       pt.bg = c(rgb(51,51,204,100, max = 255),
+               rgb(204,51,51,100, max = 255),
+               rgb(128,128,128,100, max = 255),
+               rgb(51,204,51,100, max = 255)),
+       col = c(rgb(51,51,204,255, max = 255),
+               rgb(204,51,51,255, max = 255),
+               rgb(128,128,128,255, max = 255),
+               rgb(51,204,51,255, max = 255)), 
+       pch = 21, pt.cex = 2, bty = 'n', title = 'Exchange', yjust=1, y.intersp=0.9)
+rect(7500, 3.3, xlim[2], ylim[2])
+```
+
+```{r CumCount, eval = T}
+
+par(mfrow = c(2,2), mar = c(0,0,0.5,0.5), oma = c(2,2,0,0), xpd = T, bty = 'l', cex = 1.1, ann = F)
+
+ylim = c(0,220)
+
+temp = pumpsunique %>% .[.$dex == dexs[1],]
+temp$datetime %>% plot(., sapply(., function(x) temp$Symbol[temp$datetime <= x] %>% length), type = 'S', xlim = pumpsunique$datetime %>% range, ylim = ylim, ylab = 'Cumulative count', xaxt ='n')
+temp$datetime %>% lines(., sapply(., function(x) temp$Symbol[temp$datetime <= x] %>% unique %>% length), type = 'S', col = col2)
+dexs[1] %>% legend('left', bty = 'n', legend = .)
+legend(x = min(pumpsunique$datetime), y = ylim[2], xjust = 0, yjust = 0.5, legend = paste0('\n',c('Number of pumps','Number of unique coins pumped'),
+                                  '\n(total: ', c(pumpsunique %>% NROW, pumpsunique[,c('dex','Symbol')] %>% unique%>% NROW),')')
+       , col = c('black', col2), lty = 1, bty = 'n')
+temp %>% NROW %>% text(max(temp$datetime), sum(.,3), labels = ., adj = c(1,0))
+temp$Symbol %>% unique %>% NROW %>% text(max(temp$datetime), sum(.,-2), labels = ., adj = c(0.5,1), col = 'red')
+
+temp = pumpsunique %>% .[.$dex == dexs[2],]
+temp$datetime %>% plot(., sapply(., function(x) temp$Symbol[temp$datetime <= x] %>% length), type = 'S', xlim = pumpsunique$datetime %>% range, ylim = ylim, yaxt ='n', xaxt ='n')
+temp$datetime %>% lines(., sapply(., function(x) temp$Symbol[temp$datetime <= x] %>% unique %>% length), type = 'S', col = col2)
+dexs[2] %>% legend('left', bty = 'n', legend = .)
+temp %>% NROW %>% text(max(temp$datetime), sum(.,3), labels = ., adj = c(1,0))
+temp$Symbol %>% unique %>% NROW %>% text(max(temp$datetime), sum(.,-2), labels = ., adj = c(0.5,1), col = 'red')
+
+temp = pumpsunique %>% .[.$dex == dexs[3],]
+temp$datetime %>% plot(., sapply(., function(x) temp$Symbol[temp$datetime <= x] %>% length), type = 'S', xlim = pumpsunique$datetime %>% range, ylim = ylim, ylab = 'Cumulative count')
+temp$datetime %>% lines(., sapply(., function(x) temp$Symbol[temp$datetime <= x] %>% unique %>% length), type = 'S', col = col2)
+dexs[3] %>% legend('left', bty = 'n', legend = .)
+temp %>% NROW %>% text(max(temp$datetime), sum(.,3), labels = ., adj = c(1,0))
+temp$Symbol %>% unique %>% NROW %>% text(max(temp$datetime), sum(.,-5), labels = ., adj = c(0.5,1), col = 'red')
+
+temp = pumpsunique %>% .[.$dex == dexs[4],]
+temp$datetime %>% plot(., sapply(., function(x) temp$Symbol[temp$datetime <= x] %>% length), type = 'S', xlim = pumpsunique$datetime %>% range, ylim = ylim, yaxt ='n')
+temp$datetime %>% lines(., sapply(., function(x) temp$Symbol[temp$datetime <= x] %>% unique %>% length), type = 'S', col = col2)
+dexs[4] %>% legend('left', bty = 'n', legend = .)
+temp %>% NROW %>% text(max(temp$datetime), sum(.,3), labels = ., adj = c(1,0))
+temp$Symbol %>% unique %>% NROW %>% text(max(temp$datetime), sum(.,-5), labels = ., adj = c(0.5,1), col = 'red')
+```
+
+```{r PumpVol, eval = F}
+par(xpd=T, cex = 1.5, oma = c(0,0,0,0), mar = c(2,4,1,0))
+temp = pumpsunique %>% .[.$dex == dexs[1],]
+
+pumpvol = dexs %>% sapply(function(x) pumpsunique %>% .[.$dex == x,c('volumeto','volumeto_before')] %>% apply(1,max) %>% sum(na.rm = T)) %>% .[1:4]
+prepumpvol = dexs %>% sapply(function(x) pumpsunique %>% .[.$dex == x,'volumeto_before'] %>% sum(na.rm = T)) %>% .[1:4]
+
+cbind(prepumpvol, pumpvol) %>% t %>% barplot(beside = T, 
+                                             legend.text = paste0('\n',c('Pre-pump volume \n(total: ', 'Pumped volume \n(total: '),c(sum(prepumpvol),sum(pumpvol)) %>% round,' BTC)'), args.legend = list(bty='n'),
+                                                   ylab = 'Volume in BTC', ylim = c(0,8500))
+prepumpvol %>% text(x = seq(1.5, length.out = 4, by = 3), y = ., labels = round(.,0) %>% paste0('\n'), adj = c(0.5,0.5))
+pumpvol %>% text(x = seq(2.5, length.out = 4, by = 3), y = ., labels = round(.,0) %>% paste0('\n'), adj = c(0.5,0.5))
+
+```
+
+```{r ReturnVolat, eval = F}
+pumpsunique[,paste0('hourminus',0:999)] = NA
+
+for (i in 1:NROW(pumpsunique)){
+  try({
+temp =  hourprice[[pumpsunique$Symbol[i]]][[pumpsunique$dex[i]]]
+
+foo = temp[abs((pumpsunique[i,'datetime']) %>% as.numeric - temp$time) %>% which.min + ((-1):1),]
+
+pumpsunique[i,paste0('hourminus',0:999)] =temp[match(row.names(foo)[which.max(foo$high)], row.names(temp)) + (0:999-3), 'return']
+  }, silent = T)
+}
+
+par(mfrow = c(2,2), 
+    # mar = c(5,5,0.1,0.1))
+mar = c(0,0,0.5,0), oma = c(4,4,0,0), xpd = T, bty = 'l', cex = 1.5)
+ylim = c(-1.9,1.2)
+hurlim = 0:50
+
+for (i in 1:4){
+#  pumpsunique %>% .[which(.$dex == dexs[i] & .$open_price <= 1e-5),paste0('hourminus',hurlim)]  %>% 
+#   colMeans(na.rm = T) %>% rev %>% plot(type = 'l', ylim = ylim, xlab = 'Hours before pump', ylab = 'Hourly log return')
+# pumpsunique %>% .[which(.$dex == dexs[i] & .$open_price > 1e-5 & .$open_price <= 5e-5),paste0('hourminus',hurlim)]  %>% 
+#   colMeans(na.rm = T) %>% rev %>% lines(col = col2)
+# pumpsunique %>% .[which(.$dex == dexs[i] & .$open_price > 5e-5),paste0('hourminus',hurlim)]  %>% 
+#   colMeans(na.rm = T) %>% rev %>% lines(col = 'green') 
+
+ temp = pumpsunique %>% .[which(.$dex == dexs[i]),paste0('hourminus',hurlim)] 
+plot(NULL, xlim = (3-rev(hurlim)) %>% range, ylim = ylim, yaxt = 'n', xaxt = 'n')
+legend('topleft',legend = dexs[i], bty = 'n')
+if (i %in% 3:4){
+ ((-8:0)*6+3) %>% axis(side = 1, at = .,labels = T)
+}
+if (i %in% c(1,3)){
+axis(side = 2, at = seq(-1.5,1, by=0.5))
+}
+
+  for (j in 1:NROW(temp)){
+ temp[j,]  %>% rev %>% lines(x= 3-rev(hurlim), y=., col = col1, lwd = 1.5)
+  }
+abline(v= 0, col = 'red', lwd = 0.8)
+}
+
+mtext("Hours elapsed since pump", side = 1, line = 3, outer = T, cex = 1.5) 
+mtext("Hourly log return", side = 2, line = 3, outer = T, cex = 1.5) 
+```
+
+```{r Arbitrage, eval = F}
+pumpsunique[, dexs[1:4] %>% paste0('pricehigh')] = NA
+
+hourpricetime = hourprice[[1]][[1]]$time
+
+for (i in 1:NROW(pumpsunique)){
+  try({
+hours = abs(pumpsunique[i,'datetime'] %>% as.numeric - hourpricetime) %>% which.min + ((-1):1)
+prices = sapply(1:4, function(x) hourprice[[pumps$Symbol[i]]][[dexs[x]]]$high[hours] %>% max(na.rm = T))
+pumpsunique[i, dexs[1:4] %>% paste0('pricehigh')][is.finite(prices)] = prices %>% .[is.finite(.)]
+}, silent = T)
+}
+
+par(mfrow = c(4,4), mar = c(0,0,0,0), ann = F, oma = c(3,3,4,4), cex = 1.3)
+
+lbl = c(-7,-5,-3)
+for (i in 1:4){
+ temp = pumpsunique %>% .[.$dex == dexs[i], dexs[1:4] %>% paste0('pricehigh')]
+ for (j in dexs[1:4]){
+   if (dexs[i] == j){
+     plot(NULL, xlim = c(0,1), ylim = c(0,1), xaxt = 'n', yaxt = 'n')
+     text(0.5, 0.5, dexs[i], cex = 1.5)
+   } else{
+     plot(temp[, dexs[i] %>% paste0('pricehigh')],temp[, j %>% paste0('pricehigh')], xlim = c(1e-7,10^(-1.6)), ylim = c(1e-7,10^(-1.6)),
+        ylab = 'n', xlab = 'n', log = 'xy', xaxt = 'n', yaxt = 'n')
+   abline(a=0, b =1, col = 'red')
+   if (j == dexs[1]){
+     axis(2, at = 10^lbl, labels = c(10,paste0('$10^{',lbl[-1]+8,'}$')),cex=0.6)
+   }
+     if (j == dexs[4]){
+     axis(4, at = 10^lbl, labels = c(10,paste0('$10^{',lbl[-1]+8,'}$')),cex=0.6)
+     }
+   if (i == 1){
+     axis(3, at = 10^lbl, labels = c(10,paste0('$10^{',lbl[-1]+8,'}$')),cex=0.6)
+   }
+   if (i == 4){
+     axis(1, at = 10^lbl, labels = c(10,paste0('$10^{',lbl[-1]+8,'}$')),cex=0.6)
+   }
+   }
+   
+ }
+}
+
+mtext("Coin price in Sat in the pumped exchange", side = 1, line = 1.8, outer = T, cex = 1.4) 
+mtext("Coin price in Sat in other exchanges", side = 2, line = 1.8, outer = T, cex = 1.4) 
+# for (i in 1:4){
+#  temp = pumpsunique %>% .[.$dex == dexs[i], dexs[1:4] %>% paste0('pricehigh')]
+#  for (j in dexs[1:4]){
+#    plot(temp[, dexs[i] %>% paste0('pricehigh')]/temp[, j %>% paste0('pricehigh')], rep(1, NROW(temp)),
+#         xlim = c(0,5), ylim = c(0,2),
+#         ylab = 'n', xlab = 'n', xaxt = 'n', yaxt = 'n')
+#    abline(v=1, col = 'red')
+#  }
+# }
+
+```
+
+```{r}
+# create regression table----
+
+## only cryptopia
+cryptopiacoins$lastpump = NA
+cryptopiacoins$lastpumpgroup = NA
+for (i in 1:NROW(pumpsunique)){
+  temp = pumpsunique[pumpsunique$Symbol == pumpsunique$Symbol[i],]
+  cryptopiacoins$lastpumpgroup[cryptopiacoins$Symbol == pumpsunique$Symbol[i]] = 
+    temp$username[temp$datetime %>% as.numeric %>% which.max]
+  cryptopiacoins$lastpump[cryptopiacoins$Symbol == pumpsunique$Symbol[i]] = 
+    temp$datetime %>% max %>% as.character
+}
+
+pumpscryptopia$withdata = pumpscryptopia$Symbol %in% names(hourprice)
+pumpscryptopia$reprate = 0
+pumpscryptopia %<>% .[order(.$datetime, decreasing = T),]
+for (i in 1:NROW(pumpscryptopia)){
+temp = pumpscryptopia %>% .[.$datetime <= .$datetime[i],]
+pumpscryptopia$reprate[i] = (temp$Symbol %>% duplicated %>% sum)/(temp %>% NROW)  
+} 
+
+# pumpscryptopia$reprate %>% rev %>% plot(type = 'l')
+
+colname = c('coin','dex')
+temp = data.frame(matrix(ncol = 2 , nrow = 0))
+names(temp)=colname
+for (i in names(hourprice)){
+  temp0 = cbind(i, names(hourprice[[i]]))
+  names(temp0)=colname
+  temp %<>% rbind(temp0)
+}
+
+# pumpscryptopia$withcryptopiadata = pumpscryptopia$Symbol %in% temp[temp[,2] == 'Cryptopia',1]
+# cryptopiacoins$withpricedata = cryptopiacoins$Symbol  %in% temp[temp[,2] == 'Cryptopia',1]
+
+cryptopiacoins_reg = cryptopiacoins[cryptopiacoins$Symbol %in% temp[temp[,2] == 'Cryptopia',1],]
+pumpscryptopia_reg = pumpscryptopia[which(pumpscryptopia$pump_gain>0 & pumpscryptopia$Symbol %in% cryptopiacoins_reg$Symbol),]
+
+# cryptopiacoins_reg = cryptopiacoins
+# pumpscryptopia_reg = pumpscryptopia
+
+
+hours = c(1, 3, 12, 24, 36, 48, 60, 72)
+coln = c('Name', 'Symbol','datetime', 'pumpedtimes','pumped', 'lastprice', 'caps',
+         c('return', 'volumefrom', 'volumeto') %>% lapply(function(x) paste0(x, hours,'h')) %>% unlist,
+         c('returnvola', 'volumefromvola', 'volumetovola') %>% lapply(function(x) paste0(x, hours[-1],'h')) %>% unlist)
+reg_cryptopia = data.frame(matrix(ncol = length(coln) , nrow = NROW(pumpscryptopia_reg)*NROW(cryptopiacoins_reg)))
+
+names(reg_cryptopia) = coln
+```
+
+```{r eval = F}
+for (i in 1:NROW(pumpscryptopia_reg)) {
+  # for (i in 1:2) {
+  temp = data.frame(matrix(ncol = length(coln) , nrow =  NROW(cryptopiacoins_reg)))
+  names(temp) = coln
+  temp[,coln[1:2]] = cryptopiacoins_reg[,coln[1:2]]
+  pumptime = pumpscryptopia_reg[i,coln[3]]
+  temp[,coln[3]] = pumptime
+  # temp[,'views'] = pumpscryptopia_reg[i,'views']
+  temp$pumped = F
+  temp$pumped[temp$Symbol == pumpscryptopia_reg$Symbol[i]] = T
+  # temp$pumpedbefore = temp$Symbol %in% pumpscryptopia_reg$Symbol[pumpscryptopia_reg$datetime < pumptime]
+  temp$pumpedtimes = temp$Symbol  %>% sapply(function(x)
+    sum(pumpscryptopia_reg$Symbol[pumpscryptopia_reg$datetime < pumptime] ==x, na.rm = T))
+  temp$caps = caps$mktcap[match(cryptopiacoins_reg$Symbol, caps$Symbol)] 
+  for (j in 1:NROW(cryptopiacoins_reg)) {
+    try({
+      tempprice = hourprice[[temp$Symbol[j]]]$Cryptopia
+      tempind = abs(pumptime %>% as.numeric - tempprice$time) %>% which.min + 1
+      temp[j,c('lastprice')] = 
+        tempprice[tempind,c('open')]
+      temp[j, paste0('return',hours,'h')] = hours %>% sapply(function(x) tempprice$return[tempind + 0:(x-1)] %>% sum(na.rm = T))
+      temp[j, paste0('returnvola',hours[-1],'h')] = hours[-1] %>% sapply(function(x) tempprice$return[tempind + 0:(x-1)] %>% sd(na.rm = T))
+      temp[j, paste0('volumefrom',hours,'h')] = hours %>% sapply(function(x) tempprice$volumefrom[tempind + 0:(x-1)] %>% sum(na.rm = T))
+      temp[j, paste0('volumefromvola',hours[-1],'h')] = hours[-1] %>% sapply(function(x) tempprice$volumefrom[tempind + 0:(x-1)] %>% sd(na.rm = T))
+            temp[j, paste0('volumeto',hours,'h')] = hours %>% sapply(function(x) tempprice$volumeto[tempind + 0:(x-1)] %>% sum(na.rm = T))
+      temp[j, paste0('volumetovola',hours[-1],'h')] = hours[-1] %>% sapply(function(x) tempprice$volumeto[tempind + 0:(x-1)] %>% sd(na.rm = T))
+       
+    }, silent = T)
+  }
+  print(i)
+  reg_cryptopia[(1-NROW(cryptopiacoins_reg)):0+i*NROW(cryptopiacoins_reg),] = temp
+  }
+
+# save(reg_cryptopia, file = 'reg_cryptopia.RData')
+
+```
+
+```{r}
+load('reg_cryptopia.RData')
+reg_cryptopia[,reg_cryptopia %>% sapply(class) == 'numeric'][reg_cryptopia[,reg_cryptopia %>% sapply(class) == 'numeric'] %>% sapply(function(x) !is.finite(x))] = NA
+
+reg_cryptopia %<>% merge(cryptopiacointable[-1], all = T) %>% 
+  merge(cryptopiacoins_reg %>% .[,c(
+  'Symbol','Id','WithdrawFee', 'MinWithdraw', 'MaxWithdraw', 'MinBaseTrade')])
+
+temp = CoinSnapshotFullById %>% 
+  lapply(function(x) c(x$Symbol, x$StartDate)) %>% do.call(rbind.data.frame, .)
+names(temp) = c('Symbol','StartDate')
+temp$Symbol %<>% gsub('[*]','',.)
+temp$start = temp$StartDate %>% strptime('%d/%m/%Y') %>% as.numeric
+temp$start[temp$start<1000000000] = NA
+reg_cryptopia$age = reg_cryptopia$datetime - temp$start[match(reg_cryptopia$Symbol,temp$Symbol)]
+
+reg_cryptopia.new = reg_cryptopia[, -match(c('Symbol','Id','Name'), names(reg_cryptopia))]
+reg_cryptopia.new$age[reg_cryptopia.new$age<0] = 0
+reg_cryptopia.new$pumped %<>% as.factor
+```
+
+```{r eval = F}
+set.seed(123)
+
+reg_cryptopia.new %<>% .[order(.$pumped, decreasing = T),]
+
+reg_cryptopia.imputed = rfImpute(pumped ~ ., data = reg_cryptopia.new[1:9000,])
+save(reg_cryptopia.imputed, file = 'reg_cryptopia.imputed.Rdata')
+load('reg_cryptopia.imputed.Rdata')
+
+reg_cryptopia.new[1:sum(reg_cryptopia$pumped), names(reg_cryptopia.imputed)]= reg_cryptopia.imputed[ 1:sum(reg_cryptopia$pumped),]
+save(reg_cryptopia.new, file = 'reg_cryptopia.new.Rdata')
+```
+
+```{r SplitSample}
+load('reg_cryptopia.new.Rdata')
+cutoff0 = '2018-09-05 17:00:00 BST'
+cutoff = '2018-10-29 17:00:00 GMT'
+regset1 = reg_cryptopia.new %>% .[.$datetime < cutoff0 %>% as.POSIXlt,-1]
+regset2 = reg_cryptopia.new %>% .[(.$datetime > cutoff0 %>% as.POSIXlt) & (.$datetime < cutoff %>% as.POSIXlt),-1]
+regset3 = reg_cryptopia.new %>% .[.$datetime > cutoff %>% as.POSIXlt,-1]
+```
+
+```{r eval = F}
+
+t = sum(regset1$pumped==T)
+f = NROW(regset1 %>% na.omit) - t
+
+rf1 = randomForest(pumped ~ ., data=regset1, na.action = 'na.omit', ntree = 5000, strata = regset1$pumped, sampsize = c('FALSE'= 20000,'TRUE'= 60))
+rf2 = randomForest(pumped ~ ., data=regset1, na.action = 'na.omit', ntree = 10000, strata = regset1$pumped, sampsize = c('FALSE'= 5000,'TRUE'= 60))
+rf3 = randomForest(pumped ~ ., data=regset1, na.action = 'na.omit', ntree = 20000, strata = regset1$pumped, sampsize = c('FALSE'= 1000,'TRUE'= 60))
+
+save(rf1, rf2, rf3, file = 'randomforest.RData')
+
+# temp = regset1 %>% na.omit
+# temp$lastprice = temp$lastprice * 1000000
+# glm1 = glm(pumped ~ ., data=temp[,c(1:2,4:13)], na.action = 'na.omit',family = binomial(link = "logit"), control=list(maxit=100))
+# glm2 = glm(pumped ~ ., data=regset1, na.action = 'na.omit',family = binomial(link = "logit"), control=list(maxit=100))
+
+temp = regset1  %>% na.omit %>% data.matrix
+# glm1 = glmnet(temp[,-2], temp[,'pumped'], family = 'binomial') 
+# save(glm1, file = 'glm.RData')
+```
+
+```{r}
+coln = c('r','predt','tp')
+pumpscryptopia.nona = pumpscryptopia
+pumpscryptopia.nona$pump_gain[!is.finite(pumpscryptopia$pump_gain) | pumpscryptopia$pump_gain==0] = mean(pumpscryptopia$pump_gain[pumpscryptopia$pump_gain>0], na.rm = T)
+
+perfrom = function(act,pred){
+perf = data.frame(matrix(NA, ncol = length(coln) , NROW(thresh)))
+names(perf) = coln
+for (i in 1:NROW(thresh)){
+ind = which(pred >= thresh[i])
+perf$predt[i] = NROW(ind)
+
+ind.tp = which(pred >= thresh[i] & act == T)
+perf$tp[i] = NROW(ind.tp)
+
+inv.suc = pred[ind.tp] #successful investments
+inv.return = inv.suc * pumpscryptopia.nona[match(reg_cryptopia[names(inv.suc), 'datetime'], as.numeric(pumpscryptopia.nona$datetime)),'pump_gain']
+perf$r[i] = sum(inv.return)*0.5/sum(pred[ind])
+}
+n = act %>% NROW
+t = sum(act == T, na.rm=T)
+f = n - t
+perf$fp = perf$predt - perf$tp
+perf$tn = f - perf$fp
+perf$fn = t - perf$tp
+perf %<>% transform(precision = tp/(tp+fp),
+                    recall = tp/(tp+fn)) %>%
+  transform(f1 = 2/(1/precision+1/recall))
+perf
+}
+
+thresh = seq(0,1,length.out = 1001)
+load('randomforest.RData')
+load('glm.RData')
+
+colr = c('grey30','red','blue')
+lmd = c(1e-8,1e-3,5e-3)
+```
+
+```{r result1, eval = F}
+res = list()
+res$rf1$pred = rf1$votes[,2]
+res$rf2$pred = rf2$votes[,2]
+res$rf3$pred = rf3$votes[,2]
+
+temp = regset1  %>% na.omit %>% data.matrix
+res$glm1$pred = predict(glm1,newx=temp[,-2],type='response', s=lmd[1])[,1]
+res$glm2$pred = predict(glm1,newx=temp[,-2],type='response', s=lmd[2])[,1]
+res$glm3$pred = predict(glm1,newx=temp[,-2],type='response', s=lmd[3])[,1]
+
+for (i in names(res)[1:6]){
+res[[i]]$act = reg_cryptopia[names(res[[i]]$pred),'pumped']
+res[[i]]$perf = perfrom(res[[i]]$act,res[[i]]$pred)
+res[[i]]$auc = slot(prediction(res[[i]]$pred, as.numeric(res[[i]]$act==T)) %>% performance('auc') ,'y.values')[[1]]
+}
+# save(res,file='res.RData')
+
+glmvar = cbind(coef(glm1,lmd[1]),coef(glm1,lmd[2]),coef(glm1,lmd[3]))
+rfvar = cbind(rf1$importance,rf2$importance,rf3$importance)
+colnames(glmvar) = paste0('glm',1:3)
+colnames(rfvar) = paste0('rf',1:3)
+write.csv(glmvar %>% as.matrix, file='glmvar.csv',row.names = T)
+write.csv(rfvar %>% as.matrix, file='rfvar.csv',row.names = T)
+```
+
+```{r RFTrainF1, eval = F}
+load('res.RData')
+par(mar=c(3,2,1,0), cex = 1.8, ann = F)
+
+perf = res$rf1$perf
+plot(x= thresh, y = perf$f1, xlim = c(0,1), ylim = c(0,1), type = 'l', ylab = '', col = colr[1], lwd=2)
+lines(x= thresh, y = perf$precision, lty = 2, col = colr[1], lwd=2)
+mtext('Threshold',1, cex = 1.8, line = 2)
+
+perf = res$rf2$perf
+lines(x= thresh, y = perf$f1, col = colr[2], lwd=2)
+lines(x= thresh, y = perf$precision, lty = 2, col = colr[2], lwd=2)
+
+perf = res$rf3$perf
+lines(x= thresh, y = perf$f1, col = colr[3], lwd=2)
+lines(x= thresh, y = perf$precision, lty = 2, col = colr[3], lwd=2)
+
+legend('bottomright',legend = c('RF1','RF2','RF3'), fill = colr, title = 'Model', bty = 'n', border = NA)
+legend('topright',legend = c('Precision','$F_1$'), lwd = 2, title = 'Measure', bty = 'n',lty = c(2,1))
+
+```
+
+```{r GLMTrainF1, eval = F}
+load('res.RData')
+par(mar=c(3,2,1,0), cex = 1.8, ann = F)
+
+perf = res$glm1$perf
+plot(x= thresh, y = perf$f1, xlim = c(0,1), ylim = c(0,1), type = 'l', ylab = '', col = colr[1], lwd=2)
+lines(x= thresh, y = perf$precision, lty = 2, col = colr[1], lwd=2)
+mtext('Threshold',1, cex = 1.8, line = 2)
+
+perf = res$glm2$perf
+lines(x= thresh, y = perf$f1, col = colr[2], lwd=2)
+lines(x= thresh, y = perf$precision, lty = 2, col = colr[2], lwd=2)
+
+perf = res$glm3$perf
+lines(x= thresh, y = perf$f1, col = colr[3], lwd=2)
+lines(x= thresh, y = perf$precision, lty = 2, col = colr[3], lwd=2)
+
+legend('bottomright',legend = c('GLM1','GLM2','GLM3'), fill = colr, title = 'Model', bty = 'n', border = NA)
+legend('topright',legend = c('Precision','$F_1$'), lwd = 2, title = 'Measure', bty = 'n',lty = c(2,1))
+```
+
+```{r RFTrainAUC, eval = F}
+load('res.RData')
+par(mar=c(3,3,1,0), cex = 1.8, ann = F)
+
+colr = c('grey30','red','blue')
+plot(x=res$rf1$perf$fp/sum(res$rf1$act != T, na.rm=T),y=res$rf1$perf$recall, type = 'l', col = colr[1], lwd=2)
+mtext('False positive rate',1, cex = 1.8, line = 2)
+mtext('True positive rate',2, cex = 1.8, line = 2)
+abline(a=0,b=1, lty = 3)
+lines(x=res$rf2$perf$fp/sum(res$rf1$act != T, na.rm=T),y=res$rf2$perf$recall, col = colr[2], lwd=2)
+lines(x=res$rf3$perf$fp/sum(res$rf1$act != T, na.rm=T),y=res$rf3$perf$recall, col = colr[3], lwd=2)
+
+legend('bottomright', col = colr, lwd = 2, bty = 'n',legend = paste0(
+  c('RF1','RF2','RF3'),' (AUC = ' , paste0('rf',c(1:3)) %>% sapply(function(x) res[[x]]$auc) %>% round(4),')'
+)
+    )
+```
+
+```{r GLMTrainAUC, eval = F}
+load('res.RData')
+par(mar=c(3,3,1,0), cex = 1.8, ann = F)
+
+colr = c('grey30','red','blue')
+plot(x=res$glm1$perf$fp/sum(res$rf1$act != T, na.rm=T),y=res$glm1$perf$recall, type = 'l', col = colr[1], lwd=2)
+mtext('False positive rate',1, cex = 1.8, line = 2)
+mtext('True positive rate',2, cex = 1.8, line = 2)
+abline(a=0,b=1, lty = 3)
+lines(x=res$glm2$perf$fp/sum(res$rf1$act != T, na.rm=T),y=res$glm2$perf$recall, col = colr[2], lwd=2)
+lines(x=res$glm3$perf$fp/sum(res$rf1$act != T, na.rm=T),y=res$glm3$perf$recall, col = colr[3], lwd=2)
+
+legend('bottomright', col = colr, lwd = 2, bty = 'n',legend = paste0(
+  c('GLM1','GLM2','GLM3'),' (AUC = ' , paste0('glm',c(1:3)) %>% sapply(function(x) res[[x]]$auc) %>% round(4),')'
+)
+    )
+```
+
+```{r RFTrainReturn, eval = F}
+load('res.RData')
+par(mar=c(3,2,1,0), cex = 1.8, ann = F)
+
+yat = seq(0, by = 0.2, length.out = 9)
+plot(x= thresh, y = res$rf1$perf$r, type = 'l', yaxt = 'n', lwd = 2, ylim = yat %>% range)
+mtext('Threshold',1, cex = 1.8, line = 2)
+lines(x= thresh, y = res$rf2$perf$r, col = 'red', lwd = 2)
+lines(x= thresh, y = res$rf3$perf$r, col = 'blue', lwd = 2)
+axis(side = 2, at = yat, labels = (yat*100) %>% paste0('\\%'))
+
+legend('topleft', col = colr, lwd = 2, bty = 'n',legend = c('RF1','RF2','RF3'))
+```
+
+```{r GLMTrainReturn, eval = F}
+load('res.RData')
+par(mar=c(3,2,1,0), cex = 1.8, ann = F)
+
+yat = seq(0, by = 0.2, length.out = 9)
+plot(x= thresh, y = res$glm1$perf$r, type = 'l', yaxt = 'n', lwd = 2, ylim = yat %>% range)
+mtext('Threshold',1, cex = 1.8, line = 2)
+lines(x= thresh, y = res$glm2$perf$r, col = 'red', lwd = 2)
+lines(x= thresh, y = res$glm3$perf$r, col = 'blue', lwd = 2)
+axis(side = 2, at = yat, labels = (yat*100) %>% paste0('\\%'))
+
+legend('topleft', col = colr, lwd = 2, bty = 'n',legend = c('GLM1','GLM2','GLM3'))
+```
+
+```{r result2, eval = F}
+resval = list()
+
+resval$rf1$pred = predict(rf1, newdata = regset2[,-2], predict.all=T, norm.votes = T, type = 'vote')$aggregate[,2] %>% na.omit
+resval$rf2$pred = predict(rf2, newdata = regset2[,-2], predict.all=T, norm.votes = T, type = 'vote')$aggregate[,2] %>% na.omit
+resval$rf3$pred = predict(rf3, newdata = regset2[,-2], predict.all=T, norm.votes = T, type = 'vote')$aggregate[,2] %>% na.omit
+
+temp = regset2  %>% na.omit %>% data.matrix
+resval$glm1$pred = predict(glm1,newx=temp[,-2],type='response', s=lmd[1])[,1]
+resval$glm2$pred = predict(glm1,newx=temp[,-2],type='response', s=lmd[2])[,1]
+resval$glm3$pred = predict(glm1,newx=temp[,-2],type='response', s=lmd[3])[,1]
+
+for (i in names(resval)[1:6]){
+resval[[i]]$act = reg_cryptopia[names(resval[[i]]$pred),'pumped']
+resval[[i]]$perf = perfrom(resval[[i]]$act,resval[[i]]$pred)
+resval[[i]]$auc = slot(prediction(resval[[i]]$pred %>% as.numeric, resval[[i]]$act %>% as.numeric) %>% performance('auc') ,'y.values')[[1]]
+}
+save(resval,file='resval.RData')
+```
+
+```{r RFValF1, eval = F}
+load('resval.RData')
+par(mar=c(3,2,1,0), cex = 1.8, ann = F)
+
+colr = c('grey30','red','blue')
+perf = resval$rf1$perf
+plot(x= thresh, y = perf$f1, xlim = c(0,1), ylim = c(0,1), type = 'l', ylab = '', col = colr[1], lwd=2)
+lines(x= thresh, y = perf$precision, lty = 2, col = colr[1], lwd=2)
+mtext('Threshold',1, cex = 1.8, line = 2)
+
+perf = resval$rf2$perf
+lines(x= thresh, y = perf$f1, col = colr[2], lwd=2)
+lines(x= thresh, y = perf$precision, lty = 2, col = colr[2], lwd=2)
+
+perf = resval$rf3$perf
+lines(x= thresh, y = perf$f1, col = colr[3], lwd=2)
+lines(x= thresh, y = perf$precision, lty = 2, col = colr[3], lwd=2)
+
+legend('bottomright',legend = c('RF1','RF2','RF3'), fill = colr, title = 'Model', bty = 'n', border = NA)
+legend('topright',legend = c('Precision','$F_1$'), lwd = 2, title = 'Measure', bty = 'n',lty = c(2,1))
+```
+
+```{r GLMValF1, eval = F}
+load('resval.RData')
+par(mar=c(3,2,1,0), cex = 1.8, ann = F)
+
+colr = c('grey30','red','blue')
+perf = resval$glm1$perf
+plot(x= thresh, y = perf$f1, xlim = c(0,1), ylim = c(0,1), type = 'l', ylab = '', col = colr[1], lwd=2)
+lines(x= thresh, y = perf$precision, lty = 2, col = colr[1], lwd=2)
+mtext('Threshold',1, cex = 1.8, line = 2)
+
+perf = resval$glm2$perf
+lines(x= thresh, y = perf$f1, col = colr[2], lwd=2)
+lines(x= thresh, y = perf$precision, lty = 2, col = colr[2], lwd=2)
+
+perf = resval$glm3$perf
+lines(x= thresh, y = perf$f1, col = colr[3], lwd=2)
+lines(x= thresh, y = perf$precision, lty = 2, col = colr[3], lwd=2)
+
+legend('bottomright',legend = c('GLM1','GLM2','GLM3'), fill = colr, title = 'Model', bty = 'n', border = NA)
+legend('topright',legend = c('Precision','$F_1$'), lwd = 2, title = 'Measure', bty = 'n',lty = c(2,1))
+```
+
+```{r RFValAUC, eval = F}
+load('resval.RData')
+par(mar=c(3,3,1,0), cex = 1.8, ann = F)
+
+colr = c('grey30','red','blue')
+plot(x=resval$rf1$perf$fp/sum(resval$rf1$act != T, na.rm=T),y=resval$rf1$perf$recall, type = 'l', col = colr[1], lwd=2)
+mtext('False positive rate',1, cex = 1.8, line = 2)
+mtext('True positive rate',2, cex = 1.8, line = 2)
+abline(a=0,b=1, lty = 3)
+lines(x=resval$rf2$perf$fp/sum(resval$rf1$act != T, na.rm=T),y=resval$rf2$perf$recall, col = colr[2], lwd=2)
+lines(x=resval$rf3$perf$fp/sum(resval$rf1$act != T, na.rm=T),y=resval$rf3$perf$recall, col = colr[3], lwd=2)
+
+legend('bottomright', col = colr, lwd = 2, bty = 'n',legend = paste0(
+  c('RF1','RF2','RF3'),' (AUC = ' , paste0('rf',c(1:3)) %>% sapply(function(x) resval[[x]]$auc) %>% round(4) %>% format(nsmall=4),')'
+)
+    )
+```
+
+```{r GLMValAUC, eval = F}
+load('resval.RData')
+par(mar=c(3,3,1,0), cex = 1.8, ann = F)
+
+colr = c('grey30','red','blue')
+plot(x=resval$glm1$perf$fp/sum(resval$glm1$act != T, na.rm=T),y=resval$glm1$perf$recall, type = 'l', col = colr[1], lwd=2)
+mtext('False positive rate',1, cex = 1.8, line = 2)
+mtext('True positive rate',2, cex = 1.8, line = 2)
+abline(a=0,b=1, lty = 3)
+lines(x=resval$glm2$perf$fp/sum(resval$glm1$act != T, na.rm=T),y=resval$glm2$perf$recall, col = colr[2], lwd=2)
+lines(x=resval$glm3$perf$fp/sum(resval$glm1$act != T, na.rm=T),y=resval$glm3$perf$recall, col = colr[3], lwd=2)
+
+legend('bottomright', col = colr, lwd = 2, bty = 'n',legend = paste0(
+  c('GLM1','GLM2','GLM3'),' (AUC = ' , paste0('glm',c(1:3)) %>% sapply(function(x) resval[[x]]$auc) %>% round(4) %>% format(nsmall=4),')'
+)
+    )
+```
+
+```{r RFValReturn, eval = F}
+load('resval.RData')
+par(mar=c(3,2,1,0), cex = 1.8, ann = F)
+
+yat = seq(0, by = 0.2, length.out = 9)
+plot(x= thresh, y = resval$rf1$perf$r, type = 'l', yaxt = 'n', lwd = 2, ylim = yat %>% range)
+mtext('Threshold',1, cex = 1.8, line = 2)
+lines(x= thresh, y = resval$rf2$perf$r, col = 'red', lwd = 2)
+lines(x= thresh, y = resval$rf3$perf$r, col = 'blue', lwd = 2)
+axis(side = 2, at = yat, labels = (yat*100) %>% paste0('\\%'))
+
+legend('topleft', col = colr, lwd = 2, bty = 'n',legend = c('RF1','RF2','RF3'))
+```
+
+```{r GLMValReturn, eval = F}
+load('resval.RData')
+par(mar=c(3,2,1,0), cex = 1.8, ann = F)
+
+yat = seq(0, by = 0.2, length.out = 9)
+plot(x= thresh, y = resval$glm1$perf$r, type = 'l', yaxt = 'n', lwd = 2, ylim = yat %>% range)
+mtext('Threshold',1, cex = 1.8, line = 2)
+lines(x= thresh, y = resval$glm2$perf$r, col = 'red', lwd = 2)
+lines(x= thresh, y = resval$glm3$perf$r, col = 'blue', lwd = 2)
+axis(side = 2, at = yat, labels = (yat*100) %>% paste0('\\%'))
+
+legend('topleft', col = colr, lwd = 2, bty = 'n',legend = c('GLM1','GLM2','GLM3'))
+```
+
+```{r result3, eval = F}
+restes = list()
+
+restes$rf1$pred = predict(rf1, newdata = regset3[,-2], predict.all=T, norm.votes = T, type = 'vote')$aggregate[,2] %>% na.omit
+restes$rf2$pred = predict(rf2, newdata = regset3[,-2], predict.all=T, norm.votes = T, type = 'vote')$aggregate[,2] %>% na.omit
+restes$rf3$pred = predict(rf3, newdata = regset3[,-2], predict.all=T, norm.votes = T, type = 'vote')$aggregate[,2] %>% na.omit
+
+temp = regset3  %>% na.omit %>% data.matrix
+restes$glm1$pred = predict(glm1,newx=temp[,-2],type='response', s=lmd[1])[,1]
+restes$glm2$pred = predict(glm1,newx=temp[,-2],type='response', s=lmd[2])[,1]
+restes$glm3$pred = predict(glm1,newx=temp[,-2],type='response', s=lmd[3])[,1]
+
+for (i in names(restes)[1:6]){
+restes[[i]]$act = reg_cryptopia[names(restes[[i]]$pred),'pumped']
+restes[[i]]$perf = perfrom(restes[[i]]$act,restes[[i]]$pred)
+restes[[i]]$auc = slot(prediction(restes[[i]]$pred %>% as.numeric, restes[[i]]$act %>% as.numeric) %>% performance('auc') ,'y.values')[[1]]
+}
+save(restes,file = 'restes.RData')
+```
+
+```{r RFTesF1, eval = F}
+load('restes.RData')
+par(mar=c(3,2,1,0), cex = 1.8, ann = F)
+
+colr = c('grey30','red','blue')
+perf = restes$rf1$perf
+plot(x= thresh, y = perf$f1, xlim = c(0,1), ylim = c(0,1), type = 'l', ylab = '', col = colr[1], lwd=2)
+lines(x= thresh, y = perf$precision, lty = 2, col = colr[1], lwd=2)
+mtext('Threshold',1, cex = 1.8, line = 2)
+
+perf = restes$rf2$perf
+lines(x= thresh, y = perf$f1, col = colr[2], lwd=2)
+lines(x= thresh, y = perf$precision, lty = 2, col = colr[2], lwd=2)
+
+perf = restes$rf3$perf
+lines(x= thresh, y = perf$f1, col = colr[3], lwd=2)
+lines(x= thresh, y = perf$precision, lty = 2, col = colr[3], lwd=2)
+
+legend('bottomright',legend = c('RF1','RF2','RF3'), fill = colr, title = 'Model', bty = 'n', border = NA)
+legend('topright',legend = c('Precision','$F_1$'), lwd = 2, title = 'Measure', bty = 'n',lty = c(2,1))
+```
+
+```{r GLMTesF1, eval = F}
+load('restes.RData')
+par(mar=c(3,2,1,0), cex = 1.8, ann = F)
+
+colr = c('grey30','red','blue')
+perf = restes$glm1$perf
+plot(x= thresh, y = perf$f1, xlim = c(0,1), ylim = c(0,1), type = 'l', ylab = '', col = colr[1], lwd=2)
+lines(x= thresh, y = perf$precision, lty = 2, col = colr[1], lwd=2)
+mtext('Threshold',1, cex = 1.8, line = 2)
+
+perf = restes$glm2$perf
+lines(x= thresh, y = perf$f1, col = colr[2], lwd=2)
+lines(x= thresh, y = perf$precision, lty = 2, col = colr[2], lwd=2)
+
+perf = restes$glm3$perf
+lines(x= thresh, y = perf$f1, col = colr[3], lwd=2)
+lines(x= thresh, y = perf$precision, lty = 2, col = colr[3], lwd=2)
+
+legend(x=-0.05,y=1.05,legend = c('GLM1','GLM2','GLM3'), fill = colr, title = 'Model', bty = 'n', border = NA)
+legend(x=0.67,y=0.7,legend = c('Precision','$F_1$'), lwd = 2, title = 'Measure', bty = 'n',lty = c(2,1))
+```
+
+```{r RFTesAUC, eval = F}
+load('restes.RData')
+par(mar=c(3,2,1,0), cex = 1.8, ann = F)
+
+colr = c('grey30','red','blue')
+plot(x=restes$rf1$perf$fp/sum(restes$rf1$act != T, na.rm=T),y=restes$rf1$perf$recall, type = 'l', col = colr[1], lwd=2)
+mtext('Threshold',1, cex = 1.8, line = 2)
+lines(x=restes$rf2$perf$fp/sum(restes$rf1$act != T, na.rm=T),y=restes$rf2$perf$recall, col = colr[2], lwd=2)
+lines(x=restes$rf3$perf$fp/sum(restes$rf1$act != T, na.rm=T),y=restes$rf3$perf$recall, col = colr[3], lwd=2)
+
+legend('bottomright', col = colr, lwd = 2, bty = 'n',legend = paste0(
+  c('RF1','RF2','RF3'),' (AUC = ' , paste0('rf',c(1:3)) %>% sapply(function(x) restes[[x]]$auc) %>% round(4) %>% format(nsmall=4),')'
+)
+    )
+```
+
+```{r GLMTesAUC, eval = F}
+load('restes.RData')
+par(mar=c(3,2,1,0), cex = 1.8, ann = F)
+
+colr = c('grey30','red','blue')
+plot(x=restes$glm1$perf$fp/sum(restes$glm1$act != T, na.rm=T),y=restes$glm1$perf$recall, type = 'l', col = colr[1], lwd=2)
+mtext('Threshold',1, cex = 1.8, line = 2)
+lines(x=restes$glm2$perf$fp/sum(restes$glm1$act != T, na.rm=T),y=restes$glm2$perf$recall, col = colr[2], lwd=2)
+lines(x=restes$glm3$perf$fp/sum(restes$glm1$act != T, na.rm=T),y=restes$glm3$perf$recall, col = colr[3], lwd=2)
+
+legend('bottomright', col = colr, lwd = 2, bty = 'n',legend = paste0(
+  c('GLM1','GLM2','GLM3'),' (AUC = ' , paste0('glm',c(1:3)) %>% sapply(function(x) restes[[x]]$auc) %>% round(4) %>% format(nsmall=4),')'
+)
+    )
+```
+
+```{r RFTesReturn, eval = F}
+load('restes.RData')
+par(mar=c(3,2,1,0), cex = 1.8, ann = F)
+
+yat = seq(0, by = 0.2, length.out = 12)
+plot(x= thresh, y = restes$rf1$perf$r, type = 'l', yaxt = 'n', lwd = 2, ylim = yat %>% range)
+mtext('Threshold',1, cex = 1.8, line = 2)
+lines(x= thresh, y = restes$rf2$perf$r, col = 'red', lwd = 2)
+lines(x= thresh, y = restes$rf3$perf$r, col = 'blue', lwd = 2)
+axis(side = 2, at = yat, labels = (yat*100) %>% paste0('\\%'))
+
+legend('topleft', col = colr, lwd = 2, bty = 'n',legend = c('RF1','RF2','RF3'))
+```
+
+```{r FinalInvest, eval = F}
+load('restes.RData')
+finalthresh = 0.3
+finalmodel = 'rf1'
+
+restes[[finalmodel]]$perf[which(thresh==finalthresh),]
+weight = restes[[finalmodel]]$pred %>% .[.>=finalthresh] 
+bought = weight %>% names %>% reg_cryptopia[.,]
+
+finalinvest = bought %>% cbind(weight) %>% merge(.,pumpscryptopia_reg[match(.$datetime[.$pumped==T],pumpscryptopia_reg$datetime%>%as.numeric),],all = T)
+finalinvest$datetime %<>% anytime
+finalinvest%>% write.csv('finalinvest.csv', row.names = F)
+```
+
+```{r GLMTesReturn, eval = F}
+load('restes.RData')
+par(mar=c(3,2,1,0), cex = 1.8, ann = F)
+
+yat = seq(0, by = 0.2, length.out = 13)
+plot(x= thresh, y = restes$glm1$perf$r, type = 'l', yaxt = 'n', lwd = 2, ylim = yat %>% range)
+mtext('Threshold',1, cex = 1.8, line = 2)
+lines(x= thresh, y = restes$glm2$perf$r, col = 'red', lwd = 2)
+lines(x= thresh, y = restes$glm3$perf$r, col = 'blue', lwd = 2)
+axis(side = 2, at = yat, labels = (yat*100) %>% paste0('\\%'))
+
+legend('topleft', col = colr, lwd = 2, bty = 'n',legend = c('GLM1','GLM2','GLM3'))
+```
+
+```{r eval = F}
+load('restes.RData')
+plot(x= thresh, y = res$glm1$perf$r, type = 'l', xlab = 'Threshold', ylab = 'Return', yaxt = 'n')
+
+perf = res$glm1$perf
+plot(x= thresh, y = perf$f1, xlim = c(0,1), ylim = c(0,1), type = 'l', xlab = 'Threshold', ylab = '')
+lines(x= thresh, y = perf$precision, lty = 2, col = 'red')
+lines(x= thresh, y = perf$recall, lty = 3, col = 'blue')
+
+varImpPlot(rf1, main = '', n.var = 30)
+```
+
+```{r MktCap, eval = F}
+
+par(xpd = T, oma = c(0,0,0,0), mar = c(3,4,2,2))
+pumps$mktcap = match(pumps$Symbol,caps$Symbol) %>% caps$mktcap[.]
+
+par(pch='||')
+caps$mktcap[caps$Symbol %in% pumps$Symbol[pumps$dex == dexs[1]]]  %>%
+  plot(rep(0,length(.)), ., ylim = c(0.9,max(caps$mktcap)), xlim = c(0,4), 
+       xaxt = 'n', xlab = '', ylab = 'Market cap in BTC', log='y', yaxt = 'n', bty = 'l')
+yat = 10^seq(0,6,2)
+axis(2,at=yat,labels=c(1, '$10^2$', '$10^4$', '$10^6$'))
+caps$mktcap[caps$Symbol %in% pumps$Symbol[pumps$dex == dexs[2]]]  %>%
+  points(rep(1,length(.)), .)
+caps$mktcap[caps$Symbol %in% pumps$Symbol[pumps$dex == dexs[3]]]  %>%
+  points(rep(2,length(.)), .)
+caps$mktcap[caps$Symbol %in% pumps$Symbol[pumps$dex == dexs[4]]]  %>%
+  points(rep(3,length(.)), .)
+caps$mktcap  %>%
+  points(rep(4,length(.)), .)
+
+arrows(3.75, caps$mktcap[1],  3.85, length = 0.07)
+text(3.5, caps$mktcap[1], labels = paste('Bitcoin \n$', round(caps$mktcap[1]/10^7,2), '\\times 10^7$'),
+     adj = c(0.5,0.5))
+
+
+paste('Pumped coins in \n', dexs[1:4]) %>% c('All coins listed in \n CoinMarketCap') %>% text(0:4, 0.1, labels = ., adj=c(0.5,0.5))
+
+```
+
+```{r eval = F}
+## pump and dump rpub ----
+
+# for (i in (1:NROW(pumps))[-which(pumps$pump_gain > 0)]) {
+#   try({
+#     temp = hourprice[[pumps$Symbol[i]]][['CCCAGG']]
+#         pumphours = temp[abs(pumps[i,'datetime'] %>% as.numeric - temp$time) %>% which.min + ((-1):1),]
+#     pumps[i,c('open_price','high_price','low_price','close_price')] =
+#       c(pumphours$open[pumphours$time %>% which.min],
+#         pumphours$high %>% max, 
+#         pumphours$low %>% min, 
+#         pumphours$close[pumphours$time %>% which.max])
+#   }, silent = T)
+# }
+# 
+# pumps %<>% transform(pump_gain = (high_price-open_price)/open_price,
+#                      dump_loss = (close_price-high_price)/high_price)
+# 
+# for (i in (1:NROW(pumps))[-which(pumps$pump_gain > 0)]) {
+#   try({
+#     temp = hourprice[[pumps$Symbol[i]]][[1]]
+#     pumphours = temp[abs(pumps[i,'datetime'] %>% as.numeric - temp$time) %>% which.min + ((-1):1),]
+#     pumps[i,c('open_price','high_price','low_price','close_price')] =
+#       c(pumphours$open[pumphours$time %>% which.min],
+#         pumphours$high %>% max, 
+#         pumphours$low %>% min, 
+#         pumphours$close[pumphours$time %>% which.max])
+#   }, silent = T)
+# }
+# 
+# pumps %<>% transform(pump_gain = (high_price-open_price)/open_price,
+#                      dump_loss = (close_price-high_price)/high_price)
+
+pumps = pumps[which(pumps$pump_gain > 0),]
+
+p <- plot_ly()
+
+for(i in 1:nrow(pumps)){
+  p <- add_trace(p,
+                 x = rep(pumps$datetime[i],2),  # x0, x1
+                 y = which(pumps$dex[i]==pumpsdex) + c(0,pumps$pump_gain[i])/8,  # y0, y1
+                 type = 'scatter',
+                 mode = 'lines',
+                 line = list(color = 'green', width = 3),
+                 hoverinfo = "text",
+                 showlegend = F,
+                 text = c(pumps$datetime[i]%>% as.character,
+                          paste(pumps$Symbol[i], 'pumped by',pumps$telegroup[i]),
+                          paste('3-hour open:',pumps$open_price[i], 'BTC'),
+                          paste('3-hour high:',pumps$high_price[i], 'BTC'),
+                          paste0('pump gain: ',
+                                 (pumps$pump_gain[i]*100) %>% round(2),'%'
+                          )) %>% paste(collapse  = "<br>"),
+                 name = 'Tree 1', evaluate = T  # needed to avoid lazy loading
+  ) %>% add_trace(
+                  x = rep(pumps$datetime[i],2),  # x0, x1
+                  y = which(pumps$dex[i]==pumpsdex) + c(0,pumps$dump_loss[i])/8,  # y0, y1
+                  type = 'scatter',
+                  mode = 'lines',
+                  line = list(color = 'red', width = 3),
+                  hoverinfo = "text",
+                  showlegend = F,
+                  text = c(pumps$datetime[i]%>% as.character,
+                           paste(pumps$Symbol[i], 'dumped by',pumps$telegroup[i]),
+                           paste('3-hour high:',pumps$high_price[i], 'BTC'),
+                           paste('3-hour close:',pumps$close_price[i], 'BTC'),
+                           paste0('dump loss: ',
+                                 (pumps$dump_loss[i]*100) %>% round(2),'%'
+                                 )) %>% paste(collapse  = "<br>"),
+                  name = 'Tree 2',
+                  evaluate = T  # needed to avoid lazy loading
+  )
+
+}
+
+p <- layout(p, xaxis = list(
+  range = pumps$datetime %>% range + c(-1,1)*3600*24*3, color = 'black'
+), yaxis = list(title = 'Exchange', color = 'black',
+                         tickmode = "array", tickvals = 1:NROW(pumpsdex), ticktext = pumpsdex
+                         )
+            )
+
+p
+
+```
+
+```{r eval = F}
+# get telegram channel list ----
+telegramchan = file('pumpchannels.txt'
+                    # , encoding = "UCS-2LE"
+                    ) %>% readLines %>% strsplit(';\"><a href=\"') %>% 
+  unlist %>% .[-1] %>% strsplit('\">|</a></td>') %>% sapply(`[`,c(1,2)) %>% t %>% data.frame
+
+telegramchan[,3] = telegramchan[,1] %>% strsplit('https://t.me/') %>% sapply(`[`,2)
+names(telegramchan) = c('link', 'telegroup', 'username')
+
+toadd = pumps[!(pumps$username %in% telegramchan[,3]) & nchar(pumps$username)>0,c(1,2)]
+toadd$link = paste0('https://t.me/', toadd[,2])
+telegramchan %<>% rbind(toadd) %>% na.omit %>% .[!duplicated(.$username),]
+
+telegramchan[,3] %>% writeLines('telegramchanname.txt')
+
+# get pump channel activities----
+
+telegramchan$last_msg = NA
+telegramchan$msg_collected = 0
+
+for (i in 1:NROW(telegramchan)){
+  try({
+  tempind = outpost$channel_username==telegramchan$username[i]
+  telegramchan$msg_collected[i]=sum(tempind)
+  if (sum(tempind)>0){
+    telegramchan$last_msg[i] = max(outpost$timestamp[tempind])
+  }}, silent = T)
+}
+
+telegramchan %<>% .[order(.$last_msg, decreasing = T),]
+telegramchan$last_msg %<>% anytime %>% format('%m/%d/%Y %H:%M:%S')
+telegramchan$telegroup %<>% iconv('utf-8', 'ascii', sub='')
+telegramchan %>% write.csv(file = 'telegramchan.csv')
+
+# base     <- "https://rest.coinapi.io/"
+# endpoint <- "/v1/exchangerate/BTC?apikey="  # note the request is for aseets against BTC
+# api_key  <- "1F15EE72-C6D9-447C-A835-B28E3277FE30" 
+# call <- paste0(base, endpoint, api_key)
+# get_prices <- GET(call)
+# get_prices_text <- content(get_prices, "text") 
+# 
+# 
+# pumpolymp = readLines('pumpolymp.mht')
+
+# zil = read.csv('eos_TweetsWithAPI.csv')
+# 
+# zil$created_at %>% as.Date %>% table %>% barplot()
+# 
+# zil$created_at %>% as.Date %>% as.numeric %>% density %>% plot
+
+
+coln = c('coin', 'gain', 'time', 'start', 'end', 'publishing')
+pumptbl = data.frame(matrix(ncol = length(coln) , nrow = 0))
+
+
+
+# for (i in 24:1670){
+# temp = paste0('https://pumpdump.coincheckup.com/page/',i) %>% readLines
+#   
+# assign(coln[1],
+#        temp %>% .[grepl('<div class="col-1" data-title="Cryptocurrency">',.)] %>%
+#              strsplit('">|</') %>% sapply(`[`,2) )
+# 
+# assign(coln[2],
+#             temp %>% .[grepl('<div class="col-2" data-title="Pump % gain">',.)] %>%
+#               strsplit('">|</') %>% sapply(`[`,2))
+# 
+# assign(coln[3],
+#        temp %>% .[which(grepl('<div class="col-3" data-title="Timeframe & Start Time">',.))+1] %>%
+#          gsub(' </div>','',.))
+#   
+# assign(coln[4],
+#        temp %>% .[which(grepl('<div class="col-4" data-title="Start price: BTC / USD">',.))+1] %>%
+#          gsub(' </div>','',.))
+# 
+# assign(coln[5],
+#        temp %>% .[which(grepl('<div class="col-5" data-title="End price: BTC / USD">',.))+1] %>%
+#          gsub(' </div>','',.))
+# 
+# assign(coln[6],
+#        temp %>% .[grepl('<div class="col-6" data-title="Publishing time" class="timerow">',.)] %>%
+#          strsplit('">|</') %>% sapply(`[`,2))
+# 
+# # foo = seq(from = 1, to = length(col45), by = 2)
+# # assign(coln[4],col45[foo])
+# # assign(coln[5],col45[-foo])
+# 
+# pumptbl %<>% rbind(.,coln %>% sapply(get))
+# 
+# }
+# 
+# # colnames(pumptbl) = coln
+# save(pumptbl, file= 'pumpbtl.RData')
+
+# pumptbl %>% write.csv('pumptbl.csv', row.names = F)
+
+load(file= 'pumpbtl.RData')
+
+pumptbl$gain %<>% sub("%", "",.) %>% as.numeric 
+
+pumptbl$publishing  %<>%
+  strsplit('<br>') %>% sapply(`[`,2) %>% strptime('%Y-%m-%d %H:%M:%S')
+
+
+par(ann=F)
+
+plot(pumptbl$publishing,pumptbl$gain)
+thresh = 30
+
+# pumptbl[which(pumptbl$gain>thresh),] %>% View
+
+abline(h=thresh, col='red')
+text(x=min(pumptbl$publishing),y=thresh+2*c(-1,1),labels = 
+       paste0(c('<','>'),thresh,'%: ',c(sum(pumptbl$gain<thresh,na.rm = T),sum(pumptbl$gain>thresh,na.rm = T)),' cases'),
+              adj=c(0,0.5),cex=2,col='blue')
+
+```
+
+```{r eval = F}
+pumps$username %>% unique %>% length # around 100 organized Telegram
+(pumpsunique %>% NROW) / (pumps$datetime %>% range %>% diff %>% as.numeric) # Time difference of 235.9067 days, on average 2 pumps day
+```

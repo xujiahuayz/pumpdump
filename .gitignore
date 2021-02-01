@@ -1,0 +1,13 @@
+.Rproj.user
+.Rhistory
+**/*.RData
+.Ruserdata
+**/*.csv
+**/*.session*
+**/*.pickle
+history/
+.idea
+*.txt
+
+**/tweets*.py
+**/credentials.py
