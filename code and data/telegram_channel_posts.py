@@ -13,6 +13,8 @@ from telethon.tl.types import ChannelAdminLogEventsFilter
 from telethon.tl.types import InputUserSelf
 from telethon.tl.types import InputUser
 
+from credentials import *
+
 client = TelegramClient(phone_number, api_id, api_hash).start()
 # me = client.get_me()
 # print(me.stringify())
