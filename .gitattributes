@@ -1,2 +1,4 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+code[[:space:]]and[[:space:]]data/outpost.csv filter=lfs diff=lfs merge=lfs -text
+code[[:space:]]and[[:space:]]data/outposts.csv filter=lfs diff=lfs merge=lfs -text
